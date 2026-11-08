@@ -80,6 +80,7 @@ namespace YaytsaCloud
         {
             BackColor = bg;
             web.DefaultBackgroundColor = bg;
+            menu.SetTheme(light);
             int dark = light ? 0 : 1;
             DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int));
             int caption = ColorTranslator.ToWin32(bg);
@@ -192,9 +193,10 @@ namespace YaytsaCloud
 
         static string Clip(string s, int n) => string.IsNullOrWhiteSpace(s) ? null : s.Length > n ? s.Substring(0, n - 1) + "…" : s;
 
+        readonly ThemedMenu menu = new ThemedMenu();
+
         ContextMenuStrip TrayMenu()
         {
-            var menu = new ContextMenuStrip();
             menu.Items.Add("Открыть", null, (s, e) => ShowWindow());
             var auto = new ToolStripMenuItem("Запускать вместе с Windows") { CheckOnClick = true };
             menu.Opening += (s, e) => auto.Checked = Program.Autostart;
@@ -202,6 +204,7 @@ namespace YaytsaCloud
             menu.Items.Add(auto);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Выйти", null, (s, e) => { quitting = true; Close(); });
+            menu.SetTheme(false);
             return menu;
         }
 
