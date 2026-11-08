@@ -33,13 +33,21 @@ namespace YaytsaCloud
             Renderer = new Paint(this);
             foreach (ToolStripItem i in Items) { i.ForeColor = text; i.Padding = new Padding(4, 6, 4, 6); }
             Invalidate();
+            if (IsHandleCreated) Frame();
+        }
+
+        void Frame()
+        {
+            int round = 2; // DWMWCP_ROUND
+            DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
+            int border = ColorTranslator.ToWin32(line);
+            DwmSetWindowAttribute(Handle, 34, ref border, sizeof(int)); // DWMWA_BORDER_COLOR
         }
 
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            int round = 2; // DWMWCP_ROUND
-            DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
+            Frame();
         }
 
         [DllImport("dwmapi.dll")]
@@ -52,16 +60,13 @@ namespace YaytsaCloud
 
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) => e.Graphics.Clear(m.bg);
 
-            protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
-            {
-                using var pen = new Pen(m.line);
-                e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
-            }
+            // Рамку рисует сама Windows 11 по скруглённому краю (цвет задаём в SetTheme). Своя квадратная обрезалась бы на углах.
+            protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) { }
 
             protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
             {
                 if (!e.Item.Selected || !e.Item.Enabled) return;
-                var r = new Rectangle(2, 0, e.Item.Width - 4, e.Item.Height);
+                var r = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 using var path = Rounded(r, 6);
                 using var brush = new SolidBrush(m.hover);
