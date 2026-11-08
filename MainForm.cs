@@ -173,6 +173,12 @@ namespace YaytsaCloud
                     case "remove":
                         await apps.Remove(m.id);
                         break;
+                    case "google":
+                        var cred = await GoogleLogin.Run(site);
+                        if (cred == null) break;
+                        ShowWindow();
+                        Send(new { type = "google-cred", idToken = cred["id"], accessToken = cred.TryGetValue("at", out var at) ? at : "" });
+                        break;
                     case "notify":
                         // Пока окно перед глазами, сайт сам показывает уведомления.
                         if (!Visible || WindowState == FormWindowState.Minimized || !ContainsFocus) Balloon(m.title, m.body, m.href);
