@@ -22,8 +22,7 @@ namespace YaytsaCloud
         readonly Apps apps = new Apps();
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
         readonly System.Windows.Forms.Timer updates = new System.Windows.Forms.Timer { Interval = 6 * 60 * 60 * 1000 };
-        bool quitting, hintShown, startHidden;
-        string balloonHref;
+        bool quitting, hintShown, startHidden, light;
 
         public MainForm(string url, bool startInTray)
         {
@@ -41,11 +40,6 @@ namespace YaytsaCloud
 
             tray = new NotifyIcon { Icon = Icon, Text = Program.Name, Visible = true, ContextMenuStrip = TrayMenu() };
             tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowWindow(); };
-            tray.BalloonTipClicked += (s, e) =>
-            {
-                ShowWindow();
-                if (balloonHref != null) Send(new { type = "go", href = balloonHref });
-            };
 
             apps.Changed += () => BeginInvoke((Action)(() => Send(new { type = "apps", apps = apps.Snapshot() })));
             apps.UpdateFound += name => BeginInvoke((Action)(() => Balloon("Вышло обновление", name + ": откройте карточку и нажмите «Обновить».", "")));
@@ -78,6 +72,7 @@ namespace YaytsaCloud
         // Заголовок окна в цвет шапки сайта: на Windows 11 красим его, рамку и текст, на Windows 10 хотя бы тёмный режим.
         void ApplyTheme(Color bg, bool light)
         {
+            this.light = light;
             BackColor = bg;
             web.DefaultBackgroundColor = bg;
             menu.SetTheme(light);
@@ -193,13 +188,25 @@ namespace YaytsaCloud
             }
         }
 
-        void Balloon(string title, string body, string href)
+        // Уведомления — свои окна справа внизу (Popup), как в Telegram: системные можно выключить в Windows, эти нет.
+        // Выключаются галочкой «Уведомления» в меню трея; выбор хранится файлом в папке данных.
+        static readonly string NotifyOffFile = Path.Combine(Program.DataDir, "notify-off");
+        static bool NotifyOn => !File.Exists(NotifyOffFile);
+        static void SetNotify(bool on)
         {
-            balloonHref = href;
-            tray.ShowBalloonTip(5000, Clip(title, 60) ?? Program.Name, Clip(body, 200) ?? " ", ToolTipIcon.None);
+            if (on) File.Delete(NotifyOffFile);
+            else File.WriteAllText(NotifyOffFile, "");
         }
 
-        static string Clip(string s, int n) => string.IsNullOrWhiteSpace(s) ? null : s.Length > n ? s.Substring(0, n - 1) + "…" : s;
+        void Balloon(string title, string body, string href)
+        {
+            if (!NotifyOn) return;
+            Popup.Notify(string.IsNullOrWhiteSpace(title) ? Program.Name : title, body, light, Icon, () =>
+            {
+                ShowWindow();
+                if (!string.IsNullOrEmpty(href)) Send(new { type = "go", href });
+            });
+        }
 
         readonly ThemedMenu menu = new ThemedMenu();
 
@@ -210,6 +217,10 @@ namespace YaytsaCloud
             menu.Opening += (s, e) => auto.Checked = Program.Autostart;
             auto.Click += (s, e) => Program.SetAutostart(auto.Checked);
             menu.Items.Add(auto);
+            var notify = new ToolStripMenuItem("Уведомления") { CheckOnClick = true };
+            menu.Opening += (s, e) => notify.Checked = NotifyOn;
+            notify.Click += (s, e) => SetNotify(notify.Checked);
+            menu.Items.Add(notify);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Выйти", null, (s, e) => { quitting = true; Close(); });
             menu.SetTheme(false);

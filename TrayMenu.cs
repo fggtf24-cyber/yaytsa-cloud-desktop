@@ -30,7 +30,7 @@ namespace YaytsaCloud
             muted = light ? Color.FromArgb(110, 110, 110) : Color.FromArgb(189, 189, 189);
             BackColor = bg;
             ForeColor = text;
-            Renderer = new Paint(this);
+            Renderer = new Painter(this);
             foreach (ToolStripItem i in Items) { i.ForeColor = text; i.Padding = new Padding(4, 6, 4, 6); }
             Invalidate();
             if (IsHandleCreated) Frame();
@@ -53,10 +53,10 @@ namespace YaytsaCloud
         [DllImport("dwmapi.dll")]
         static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
-        class Paint : ToolStripRenderer
+        class Painter : ToolStripRenderer
         {
             readonly ThemedMenu m;
-            public Paint(ThemedMenu menu) => m = menu;
+            public Painter(ThemedMenu menu) => m = menu;
 
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) => e.Graphics.Clear(m.bg);
 

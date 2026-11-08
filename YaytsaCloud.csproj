@@ -11,7 +11,7 @@
     <RootNamespace>YaytsaCloud</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.0.6</Version>
+    <Version>1.0.7</Version>
     <Product>Яйца Cloud</Product>
     <Company>Яйца Cloud</Company>
     <Copyright>Яйца Cloud</Copyright>
