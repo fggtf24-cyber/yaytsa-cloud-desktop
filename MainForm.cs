@@ -122,7 +122,9 @@ namespace YaytsaCloud
                 else OpenExternal(e.Uri);
             };
             core.WebMessageReceived += (s, e) => OnMessage(e.WebMessageAsJson);
-            core.Navigate(site);
+            // Свежий сайт при каждом запуске: GitHub Pages и его CDN держат главную страницу до 10 минут, и после выкладки
+            // приложение открывало бы старую версию. Метка в адресе делает запрос новым; остальные файлы сайт версионирует сам.
+            core.Navigate(site + (site.Contains("?") ? "&" : "?") + "t=" + DateTime.UtcNow.Ticks);
             await SelfUpdate();
         }
 
