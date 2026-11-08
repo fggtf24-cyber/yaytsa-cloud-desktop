@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- .NET Framework 4.8 уже стоит в каждой Windows 10 и 11, поэтому exe маленький и ничего доустанавливать не надо. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>YaytsaCloud</AssemblyName>
+    <RootNamespace>YaytsaCloud</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>Яйца Cloud</Product>
+    <Company>Яйца Cloud</Company>
+    <Copyright>Яйца Cloud</Copyright>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <WebView2Ver>1.0.3485.44</WebView2Ver>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="$(WebView2Ver)" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <!-- Библиотеки WebView2 вшиты в exe и распаковываются рядом при первом запуске: пользователь скачивает один файл. -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(NuGetPackageRoot)microsoft.web.webview2\$(WebView2Ver)\lib\net462\Microsoft.Web.WebView2.Core.dll" LogicalName="Microsoft.Web.WebView2.Core.dll" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)microsoft.web.webview2\$(WebView2Ver)\lib\net462\Microsoft.Web.WebView2.WinForms.dll" LogicalName="Microsoft.Web.WebView2.WinForms.dll" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)microsoft.web.webview2\$(WebView2Ver)\runtimes\win-x64\native\WebView2Loader.dll" LogicalName="WebView2Loader.dll" />
+    <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
+  </ItemGroup>
+
+</Project>

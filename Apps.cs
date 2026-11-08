@@ -1,0 +1,331 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using Microsoft.Win32;
+
+namespace YaytsaCloud
+{
+    // Программа из каталога сайта.
+    public class CatalogApp { public string id, name, file; }
+
+    // Что мы знаем об установленной программе.
+    // kind: setup — ставилась установщиком, её видно в «Программы и компоненты»; portable — один exe в нашей папке.
+    // fp — отпечаток файла на сервере при установке. Поменялся — вышла новая версия.
+    public class Installed { public string kind, key, exe, fp; }
+
+    public class Apps
+    {
+        static readonly string StateFile = Path.Combine(Program.DataDir, "apps.json");
+        static readonly string Downloads = Path.Combine(Program.DataDir, "downloads");
+        static readonly string PortableRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
+        static readonly string StartMenuDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), Program.Name);
+        static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
+        public static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+
+        static Apps() => Http.DefaultRequestHeaders.UserAgent.ParseAdd("YaytsaCloud/" + Program.Version.ToString(3));
+
+        public List<CatalogApp> Catalog = new List<CatalogApp>();
+        Dictionary<string, Installed> state = new Dictionary<string, Installed>();
+        readonly Dictionary<string, string> latest = new Dictionary<string, string>(); // id -> свежий отпечаток
+        readonly Dictionary<string, double> busy = new Dictionary<string, double>();   // id -> прогресс 0..1, -1 — идёт установщик
+
+        public event Action Changed;
+        public event Action<string> UpdateFound;
+
+        public Apps()
+        {
+            try { state = Json.Deserialize<Dictionary<string, Installed>>(File.ReadAllText(StateFile)) ?? state; } catch { }
+        }
+
+        void Save()
+        {
+            Directory.CreateDirectory(Program.DataDir);
+            File.WriteAllText(StateFile, Json.Serialize(state));
+        }
+
+        void Fire() => Changed?.Invoke();
+
+        // Состояние для сайта: id -> { state: installed | update | busy, progress }.
+        public Dictionary<string, object> Snapshot()
+        {
+            var r = new Dictionary<string, object>();
+            foreach (var a in Catalog)
+            {
+                if (busy.TryGetValue(a.id, out var p)) r[a.id] = new { state = "busy", progress = p };
+                else if (Find(a) is Installed i)
+                    r[a.id] = new { state = i.fp != null && latest.TryGetValue(a.id, out var fp) && fp != null && fp != i.fp ? "update" : "installed", open = i.exe != null };
+            }
+            return r;
+        }
+
+        public void SetCatalog(List<CatalogApp> apps)
+        {
+            var first = Catalog.Count == 0;
+            Catalog = apps.Where(a => a?.id != null && Uri.TryCreate(a.file, UriKind.Absolute, out var u) && u.Scheme == "https").ToList();
+            Fire();
+            // Сайт прислал список впервые: сразу проверяем обновления, дальше — по таймеру.
+            if (first && Catalog.Count > 0) _ = CheckUpdates();
+        }
+
+        // Установлена ли программа. Ищем по нашей записи, а если её нет — по имени в списке программ Windows:
+        // так видно и то, что поставили раньше, ещё без Яйца Cloud.
+        Installed Find(CatalogApp a)
+        {
+            if (state.TryGetValue(a.id, out var i))
+            {
+                if (i.kind == "portable" ? File.Exists(i.exe) : Uninstaller.Exists(i.key)) return i;
+                state.Remove(a.id);
+                Save();
+            }
+            var key = Uninstaller.ByName(a.name);
+            if (key == null) return null;
+            i = new Installed { kind = "setup", key = key, exe = Uninstaller.Exe(key) };
+            state[a.id] = i;
+            Save();
+            return i;
+        }
+
+        // Отпечаток файла: адрес после переадресаций (у релизов GitHub в нём номер файла) + ETag + размер.
+        static async Task<string> Fingerprint(string url)
+        {
+            using var res = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            res.EnsureSuccessStatusCode();
+            return res.RequestMessage.RequestUri.GetLeftPart(UriPartial.Path) + "|" + res.Headers.ETag?.Tag + "|" + res.Content.Headers.ContentLength;
+        }
+
+        public async Task CheckUpdates()
+        {
+            foreach (var a in Catalog.ToList())
+            {
+                var i = Find(a);
+                if (i == null || busy.ContainsKey(a.id)) continue;
+                string fp;
+                try { fp = await Fingerprint(a.file); } catch { continue; }
+                // Поставлено до нас: версию не знаем, считаем свежей.
+                if (i.fp == null) { i.fp = fp; Save(); }
+                var was = latest.TryGetValue(a.id, out var old) ? old : i.fp;
+                latest[a.id] = fp;
+                if (fp != i.fp && fp != was) UpdateFound?.Invoke(a.name);
+            }
+            Fire();
+        }
+
+        public async Task Install(string id)
+        {
+            var a = Catalog.FirstOrDefault(x => x.id == id);
+            if (a == null || busy.ContainsKey(id)) return;
+            busy[id] = 0;
+            Fire();
+            try
+            {
+                Directory.CreateDirectory(Downloads);
+                string path, fp;
+                using (var res = await Http.GetAsync(a.file, HttpCompletionOption.ResponseHeadersRead))
+                {
+                    res.EnsureSuccessStatusCode();
+                    var uri = res.RequestMessage.RequestUri;
+                    fp = uri.GetLeftPart(UriPartial.Path) + "|" + res.Headers.ETag?.Tag + "|" + res.Content.Headers.ContentLength;
+                    var name = Path.GetFileName(new Uri(a.file).AbsolutePath);
+                    if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && !name.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
+                        throw new Exception("Это не установщик Windows.");
+                    path = Path.Combine(Downloads, name);
+                    var total = res.Content.Headers.ContentLength ?? 0;
+                    using var src = await res.Content.ReadAsStreamAsync();
+                    using var dst = File.Create(path);
+                    var buf = new byte[81920];
+                    long done = 0;
+                    var last = DateTime.MinValue;
+                    int n;
+                    while ((n = await src.ReadAsync(buf, 0, buf.Length)) > 0)
+                    {
+                        await dst.WriteAsync(buf, 0, n);
+                        done += n;
+                        if (total > 0 && (DateTime.Now - last).TotalMilliseconds > 150)
+                        {
+                            last = DateTime.Now;
+                            busy[id] = (double)done / total;
+                            Fire();
+                        }
+                    }
+                }
+
+                busy[id] = -1;
+                Fire();
+                var setup = Regex.IsMatch(Path.GetFileName(path), "setup|install", RegexOptions.IgnoreCase) || path.EndsWith(".msi", StringComparison.OrdinalIgnoreCase);
+                var i = setup ? await RunSetup(a, path) : InstallPortable(a, path);
+                i.fp = fp;
+                state[id] = i;
+                latest[id] = fp;
+                Save();
+                try { File.Delete(path); } catch { }
+            }
+            finally
+            {
+                busy.Remove(id);
+                Fire();
+            }
+        }
+
+        async Task<Installed> RunSetup(CatalogApp a, string path)
+        {
+            var before = Uninstaller.All();
+            var p = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            await Task.Run(() => p.WaitForExit());
+            // Новая или обновлённая запись в списке программ — наша. Иначе ищем по имени.
+            var after = Uninstaller.All();
+            var key = after.Where(kv => !before.TryGetValue(kv.Key, out var v) || v != kv.Value).Select(kv => kv.Key).FirstOrDefault(k => Uninstaller.Matches(k, a.name))
+                ?? after.Keys.Where(k => !before.ContainsKey(k)).FirstOrDefault()
+                ?? Uninstaller.ByName(a.name);
+            if (key == null) throw new Exception("Установка не завершилась.");
+            return new Installed { kind = "setup", key = key, exe = Uninstaller.Exe(key) };
+        }
+
+        Installed InstallPortable(CatalogApp a, string path)
+        {
+            var dir = Path.Combine(PortableRoot, Regex.Replace(a.name, @"[^\w\- ]", "").Trim() is var n && n.Length > 0 ? n : a.id);
+            Directory.CreateDirectory(dir);
+            var exe = Path.Combine(dir, Path.GetFileName(path));
+            try { File.Copy(path, exe, true); }
+            catch (IOException) { throw new Exception($"Закройте {a.name} и попробуйте ещё раз."); }
+            try { Program.Shortcut(Path.Combine(StartMenuDir, a.name + ".lnk"), exe); } catch { }
+            return new Installed { kind = "portable", exe = exe };
+        }
+
+        public void Open(string id)
+        {
+            var a = Catalog.FirstOrDefault(x => x.id == id);
+            var i = a == null ? null : Find(a);
+            if (i?.exe == null) throw new Exception("Не нашёл, как запустить программу. Откройте её из меню «Пуск».");
+            Process.Start(new ProcessStartInfo(i.exe) { WorkingDirectory = Path.GetDirectoryName(i.exe), UseShellExecute = true });
+        }
+
+        public async Task Remove(string id)
+        {
+            var a = Catalog.FirstOrDefault(x => x.id == id);
+            var i = a == null ? null : Find(a);
+            if (i == null || busy.ContainsKey(id)) return;
+            busy[id] = -1;
+            Fire();
+            try
+            {
+                if (i.kind == "portable")
+                {
+                    try { Directory.Delete(Path.GetDirectoryName(i.exe), true); }
+                    catch (Exception) { throw new Exception($"Закройте {a.name} и попробуйте ещё раз."); }
+                    try { File.Delete(Path.Combine(StartMenuDir, a.name + ".lnk")); } catch { }
+                }
+                else
+                {
+                    await Task.Run(() => Uninstaller.Run(i.key));
+                    // Многие удалялки копируют себя во временную папку и сразу выходят: ждём, пока запись пропадёт.
+                    for (var t = 0; t < 180 && Uninstaller.Exists(i.key); t++) await Task.Delay(1000);
+                }
+                if (i.kind == "portable" || !Uninstaller.Exists(i.key)) { state.Remove(id); Save(); }
+            }
+            finally
+            {
+                busy.Remove(id);
+                Fire();
+            }
+        }
+    }
+
+    // Список «Программы и компоненты»: ключи Uninstall в HKCU и HKLM (64 и 32 бита).
+    // Ключ пишем строкой "HKCU|64|имя", чтобы хранить в json.
+    static class Uninstaller
+    {
+        const string Path_ = @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+        static readonly (RegistryHive hive, RegistryView view, string tag)[] Roots =
+        {
+            (RegistryHive.CurrentUser, RegistryView.Registry64, "HKCU|64"),
+            (RegistryHive.LocalMachine, RegistryView.Registry64, "HKLM|64"),
+            (RegistryHive.LocalMachine, RegistryView.Registry32, "HKLM|32"),
+        };
+
+        static RegistryKey Open(string key)
+        {
+            var parts = key.Split(new[] { '|' }, 3);
+            if (parts.Length != 3) return null;
+            var root = Roots.FirstOrDefault(r => r.tag == parts[0] + "|" + parts[1]);
+            if (root.tag == null) return null;
+            return RegistryKey.OpenBaseKey(root.hive, root.view).OpenSubKey(Path_ + "\\" + parts[2]);
+        }
+
+        public static bool Exists(string key) { using var k = Open(key); return k != null; }
+
+        // ключ -> имя + версия: по изменению видно, что установщик что-то поставил или обновил.
+        public static Dictionary<string, string> All()
+        {
+            var r = new Dictionary<string, string>();
+            foreach (var (hive, view, tag) in Roots)
+            {
+                using var root = RegistryKey.OpenBaseKey(hive, view).OpenSubKey(Path_);
+                if (root == null) continue;
+                foreach (var name in root.GetSubKeyNames())
+                {
+                    using var k = root.OpenSubKey(name);
+                    var display = k?.GetValue("DisplayName") as string;
+                    if (string.IsNullOrEmpty(display)) continue;
+                    r[tag + "|" + name] = display + "|" + k.GetValue("DisplayVersion");
+                }
+            }
+            return r;
+        }
+
+        static string Norm(string s) => Regex.Replace(s ?? "", @"[\s\-_.]", "").ToLowerInvariant();
+
+        public static bool Matches(string key, string appName)
+        {
+            using var k = Open(key);
+            var display = Norm(k?.GetValue("DisplayName") as string);
+            var name = Norm(appName);
+            return name.Length > 0 && display.StartsWith(name);
+        }
+
+        public static string ByName(string appName) => All().Keys.FirstOrDefault(k => Matches(k, appName));
+
+        // Чем запускать: DisplayIcon обычно указывает на сам exe, иначе ищем exe в папке установки.
+        public static string Exe(string key)
+        {
+            using var k = Open(key);
+            if (k == null) return null;
+            var icon = (k.GetValue("DisplayIcon") as string ?? "").Trim();
+            icon = Regex.Replace(icon, @",-?\d+$", "").Trim('"');
+            if (icon.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(icon) && !NotApp(icon)) return icon;
+            var dir = (k.GetValue("InstallLocation") as string ?? "").Trim('"');
+            if (!Directory.Exists(dir)) return null;
+            return Directory.GetFiles(dir, "*.exe").FirstOrDefault(f => !NotApp(f));
+        }
+
+        // Удалялки, установщики и обновлялки — не сама программа.
+        static bool NotApp(string exe) => Regex.IsMatch(Path.GetFileName(exe), "^unins|uninstall|setup|update", RegexOptions.IgnoreCase);
+
+        public static void Run(string key)
+        {
+            string cmd;
+            using (var k = Open(key)) cmd = (k?.GetValue("QuietUninstallString") ?? k?.GetValue("UninstallString")) as string;
+            if (string.IsNullOrWhiteSpace(cmd)) throw new Exception("У программы нет удаления. Удалите её в параметрах Windows.");
+            cmd = cmd.Trim();
+            string file, args;
+            if (cmd.StartsWith("\""))
+            {
+                var end = cmd.IndexOf('"', 1);
+                file = cmd.Substring(1, end - 1);
+                args = cmd.Substring(end + 1).Trim();
+            }
+            else
+            {
+                var m = Regex.Match(cmd, @"^(.+?\.exe)\s*(.*)$", RegexOptions.IgnoreCase);
+                file = m.Success ? m.Groups[1].Value : cmd;
+                args = m.Success ? m.Groups[2].Value : "";
+            }
+            Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true })?.WaitForExit();
+        }
+    }
+}
