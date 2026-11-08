@@ -30,10 +30,19 @@ namespace YaytsaCloud
 
         public static EventWaitHandle ShowSignal;
 
+        // Просим запущенную копию закрыться самой, как через «Выйти» в трее. Если убить её сразу, встроенный браузер
+        // не успеет аккуратно закрыть своё хранилище, и вход в аккаунт может потеряться. Kill — только если не закрылась.
+        public const string QuitName = "YaytsaCloud.Quit";
+        static void Quit()
+        {
+            try { using var e = EventWaitHandle.OpenExisting(QuitName); e.Set(); } catch { }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
             if (args.Contains("--uninstall")) { Uninstall(); return; }
+            if (args.Contains("--quit")) { Quit(); return; }
 
             // Первый запуск скачанного файла: ставим себя в профиль пользователя (без прав администратора) и запускаемся оттуда.
             if (!string.Equals(Path.GetFullPath(Exe), Path.GetFullPath(InstalledExe), StringComparison.OrdinalIgnoreCase) && !args.Contains("--portable"))
@@ -90,9 +99,10 @@ namespace YaytsaCloud
             try
             {
                 // Если уже запущена установленная копия, закрываем её, иначе exe не перезаписать.
-                foreach (var p in Process.GetProcessesByName("YaytsaCloud").Where(p => p.Id != Process.GetCurrentProcess().Id))
+                Quit();
+            foreach (var p in Process.GetProcessesByName("YaytsaCloud").Where(p => p.Id != Process.GetCurrentProcess().Id))
                 {
-                    try { p.Kill(); p.WaitForExit(3000); } catch { }
+                    try { if (!p.WaitForExit(8000)) { p.Kill(); p.WaitForExit(3000); } } catch { }
                 }
                 Directory.CreateDirectory(InstallDir);
                 File.Copy(Exe, InstalledExe, true);
@@ -123,9 +133,10 @@ namespace YaytsaCloud
         static void Uninstall()
         {
             if (MessageBox.Show($"Удалить {Name}? Программы, установленные через него, останутся.", Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            Quit();
             foreach (var p in Process.GetProcessesByName("YaytsaCloud").Where(p => p.Id != Process.GetCurrentProcess().Id))
             {
-                try { p.Kill(); p.WaitForExit(3000); } catch { }
+                try { if (!p.WaitForExit(8000)) { p.Kill(); p.WaitForExit(3000); } } catch { }
             }
             SetAutostart(false);
             Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false);

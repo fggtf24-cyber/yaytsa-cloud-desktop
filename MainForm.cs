@@ -55,6 +55,9 @@ namespace YaytsaCloud
 
             // Второй запуск (ярлык, «Пуск») показывает уже открытое окно.
             new Thread(() => { while (Program.ShowSignal.WaitOne()) BeginInvoke((Action)ShowWindow); }) { IsBackground = true }.Start();
+            // Новая копия при установке поверх просит эту закрыться: выходим так же, как через «Выйти» в трее.
+            var quit = new EventWaitHandle(false, EventResetMode.AutoReset, Program.QuitName);
+            new Thread(() => { quit.WaitOne(); BeginInvoke((Action)(() => { quitting = true; Close(); })); }) { IsBackground = true }.Start();
 
             Load += async (s, e) => await Init();
         }
