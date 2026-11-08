@@ -47,6 +47,9 @@ namespace YaytsaCloud
             if (!first) { ShowSignal.Set(); return; }
 
             Directory.CreateDirectory(DataDir);
+            // После самообновления в «Параметры → Приложения» должна быть новая версия.
+            if (string.Equals(Path.GetFullPath(Exe), Path.GetFullPath(InstalledExe), StringComparison.OrdinalIgnoreCase))
+                try { using var k = Registry.CurrentUser.OpenSubKey(UninstallKey, true); k?.SetValue("DisplayVersion", Version.ToString(3)); } catch { }
             Extract(Path.GetDirectoryName(Exe));
             try { File.Delete(Exe + ".old"); } catch { }
 

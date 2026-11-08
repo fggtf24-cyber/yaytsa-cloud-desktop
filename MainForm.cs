@@ -68,8 +68,25 @@ namespace YaytsaCloud
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            int dark = 1; // тёмный заголовок окна, как сайт
+            // Тема с прошлого запуска, чтобы окно сразу открылось в нужных цветах.
+            try { var t = File.ReadAllText(ThemeFile).Split('|'); ApplyTheme(ColorTranslator.FromHtml(t[0]), t[1] == "light"); }
+            catch { ApplyTheme(Color.FromArgb(11, 11, 11), false); }
+        }
+
+        static readonly string ThemeFile = Path.Combine(Program.DataDir, "theme.txt");
+
+        // Заголовок окна в цвет шапки сайта: на Windows 11 красим его, рамку и текст, на Windows 10 хотя бы тёмный режим.
+        void ApplyTheme(Color bg, bool light)
+        {
+            BackColor = bg;
+            web.DefaultBackgroundColor = bg;
+            int dark = light ? 0 : 1;
             DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int));
+            int caption = ColorTranslator.ToWin32(bg);
+            int text = ColorTranslator.ToWin32(light ? Color.FromArgb(17, 17, 17) : Color.FromArgb(240, 240, 240));
+            DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int)); // DWMWA_CAPTION_COLOR
+            DwmSetWindowAttribute(Handle, 34, ref caption, sizeof(int)); // DWMWA_BORDER_COLOR
+            DwmSetWindowAttribute(Handle, 36, ref text, sizeof(int));    // DWMWA_TEXT_COLOR
         }
 
         [DllImport("dwmapi.dll")]
@@ -126,7 +143,7 @@ namespace YaytsaCloud
         }
 
 #pragma warning disable CS0649 // поля заполняет JavaScriptSerializer
-        class Message { public string type, id, title, body, href; public List<CatalogApp> apps; }
+        class Message { public string type, id, title, body, href, bg; public bool light; public List<CatalogApp> apps; }
 
         async void OnMessage(string raw)
         {
@@ -137,6 +154,12 @@ namespace YaytsaCloud
             {
                 switch (m.type)
                 {
+                    case "theme":
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(m.bg ?? "", "^#[0-9A-Fa-f]{6}$")) break;
+                        var color = ColorTranslator.FromHtml(m.bg);
+                        ApplyTheme(color, m.light);
+                        File.WriteAllText(ThemeFile, ColorTranslator.ToHtml(color) + "|" + (m.light ? "light" : "dark"));
+                        break;
                     case "catalog":
                         apps.SetCatalog(m.apps ?? new List<CatalogApp>());
                         break;
