@@ -76,6 +76,9 @@ namespace YaytsaCloud
             protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
             {
                 e.TextColor = e.Item.Enabled ? m.text : m.muted;
+                // По высоте ровно по центру пункта: иначе с отступами текст прилипает к верху подсветки.
+                e.TextRectangle = new Rectangle(e.TextRectangle.X, 0, e.TextRectangle.Width, e.Item.Height);
+                e.TextFormat = (e.TextFormat & ~(TextFormatFlags.Top | TextFormatFlags.Bottom)) | TextFormatFlags.VerticalCenter;
                 base.OnRenderItemText(e);
             }
 
@@ -85,7 +88,7 @@ namespace YaytsaCloud
                 var r = e.ImageRectangle;
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 using var pen = new Pen(m.text, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-                float x = r.Left + r.Width / 2f, y = r.Top + r.Height / 2f;
+                float x = r.Left + r.Width / 2f, y = e.Item.Height / 2f;
                 e.Graphics.DrawLines(pen, new[] { new PointF(x - 5, y), new PointF(x - 1.5f, y + 3.5f), new PointF(x + 5, y - 4) });
             }
 
