@@ -15,7 +15,8 @@ namespace YaytsaCloud
     public class CatalogApp { public string id, name, file; }
 
     // Что мы знаем об установленной программе.
-    // kind: setup — ставилась установщиком, её видно в «Программы и компоненты»; portable — один exe в нашей папке.
+    // kind: setup — ставилась установщиком, её видно в «Программы и компоненты»; portable — один exe в нашей папке;
+    // shortcut — найдена по ярлыку в «Пуске» (программа без установщика, лежит где угодно): открыть можно, удалить — нет.
     // fp — отпечаток файла на сервере при установке. Поменялся — вышла новая версия.
     public class Installed { public string kind, key, exe, fp; }
 
@@ -34,6 +35,7 @@ namespace YaytsaCloud
         Dictionary<string, Installed> state = new Dictionary<string, Installed>();
         readonly Dictionary<string, string> latest = new Dictionary<string, string>(); // id -> свежий отпечаток
         readonly Dictionary<string, double> busy = new Dictionary<string, double>();   // id -> прогресс 0..1, -1 — идёт установщик
+        readonly Dictionary<string, DateTime> missUntil = new Dictionary<string, DateTime>(); // не нашли — не ищем заново 15 секунд
 
         public event Action Changed;
         public event Action<string> UpdateFound;
@@ -59,7 +61,7 @@ namespace YaytsaCloud
             {
                 if (busy.TryGetValue(a.id, out var p)) r[a.id] = new { state = "busy", progress = p };
                 else if (Find(a) is Installed i)
-                    r[a.id] = new { state = i.fp != null && latest.TryGetValue(a.id, out var fp) && fp != null && fp != i.fp ? "update" : "installed", open = i.exe != null };
+                    r[a.id] = new { state = i.fp != null && latest.TryGetValue(a.id, out var fp) && fp != null && fp != i.fp ? "update" : "installed", open = i.exe != null, removable = i.kind != "shortcut" };
             }
             return r;
         }
@@ -79,13 +81,16 @@ namespace YaytsaCloud
         {
             if (state.TryGetValue(a.id, out var i))
             {
-                if (i.kind == "portable" ? File.Exists(i.exe) : Uninstaller.Exists(i.key)) return i;
+                if (i.kind == "setup" ? Uninstaller.Exists(i.key) : File.Exists(i.exe)) return i;
                 state.Remove(a.id);
                 Save();
             }
+            // Поиск по реестру и ярлыкам небыстрый, а Snapshot зовут на каждый процент загрузки.
+            if (missUntil.TryGetValue(a.id, out var until) && until > DateTime.Now) return null;
             var key = Uninstaller.ByName(a.name);
-            if (key == null) return null;
-            i = new Installed { kind = "setup", key = key, exe = Uninstaller.Exe(key) };
+            var lnk = key == null ? Shortcuts.Find(a) : null;
+            if (key == null && lnk == null) { missUntil[a.id] = DateTime.Now.AddSeconds(15); return null; }
+            i = key != null ? new Installed { kind = "setup", key = key, exe = Uninstaller.Exe(key) } : new Installed { kind = "shortcut", exe = lnk };
             state[a.id] = i;
             Save();
             return i;
@@ -121,6 +126,7 @@ namespace YaytsaCloud
             var a = Catalog.FirstOrDefault(x => x.id == id);
             if (a == null || busy.ContainsKey(id)) return;
             busy[id] = 0;
+            missUntil.Remove(id);
             Fire();
             try
             {
@@ -209,7 +215,8 @@ namespace YaytsaCloud
         {
             var a = Catalog.FirstOrDefault(x => x.id == id);
             var i = a == null ? null : Find(a);
-            if (i == null || busy.ContainsKey(id)) return;
+            if (i == null || i.kind == "shortcut" || busy.ContainsKey(id)) return;
+            missUntil.Remove(id);
             busy[id] = -1;
             Fire();
             try
@@ -233,6 +240,47 @@ namespace YaytsaCloud
                 busy.Remove(id);
                 Fire();
             }
+        }
+    }
+
+    // Ярлыки в «Пуске»: так видно программы без установщика, например exe из «Загрузок» с ярлыком.
+    // Подходит ярлык с именем программы или ярлык на exe с тем же именем файла, что и в каталоге.
+    static class Shortcuts
+    {
+        static readonly string[] Dirs =
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
+        };
+
+        static string Norm(string s) => Regex.Replace(s ?? "", @"[\s\-_.]", "").ToLowerInvariant();
+
+        public static string Find(CatalogApp a)
+        {
+            var name = Norm(a.name);
+            var file = Path.GetFileName(new Uri(a.file).AbsolutePath);
+            foreach (var dir in Dirs.Where(Directory.Exists))
+            {
+                string[] links;
+                try { links = Directory.GetFiles(dir, "*.lnk", SearchOption.AllDirectories); } catch { continue; }
+                foreach (var lnk in links)
+                {
+                    var byName = name.Length > 0 && Norm(Path.GetFileNameWithoutExtension(lnk)).StartsWith(name);
+                    string target;
+                    try { target = Target(lnk); } catch { continue; }
+                    if (string.IsNullOrEmpty(target) || !target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(target)) continue;
+                    if (Regex.IsMatch(Path.GetFileName(target), "^unins|uninstall|setup", RegexOptions.IgnoreCase)) continue;
+                    if (byName || string.Equals(Path.GetFileName(target), file, StringComparison.OrdinalIgnoreCase)) return target;
+                }
+            }
+            return null;
+        }
+
+        static string Target(string lnk)
+        {
+            var shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+            var s = shell.GetType().InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+            return (string)s.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.GetProperty, null, s, null);
         }
     }
 
