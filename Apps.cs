@@ -12,7 +12,8 @@ using Microsoft.Win32;
 namespace YaytsaCloud
 {
     // Программа из каталога сайта.
-    public class CatalogApp { public string id, name, file; }
+    // silent — ключи тихой установки, если установщик самодельный и сам их не угадать.
+    public class CatalogApp { public string id, name, file, silent; }
 
     // Что мы знаем об установленной программе.
     // kind: setup — ставилась установщиком, её видно в «Программы и компоненты»; portable — один exe в нашей папке;
@@ -34,7 +35,7 @@ namespace YaytsaCloud
         public List<CatalogApp> Catalog = new List<CatalogApp>();
         Dictionary<string, Installed> state = new Dictionary<string, Installed>();
         readonly Dictionary<string, string> latest = new Dictionary<string, string>(); // id -> свежий отпечаток
-        readonly Dictionary<string, double> busy = new Dictionary<string, double>();   // id -> прогресс 0..1, -1 — идёт установщик
+        readonly Dictionary<string, double> busy = new Dictionary<string, double>();   // id -> прогресс 0..1, -1 — идёт установщик, -2 — удаление
         readonly Dictionary<string, DateTime> missUntil = new Dictionary<string, DateTime>(); // не нашли — не ищем заново 15 секунд
 
         public event Action Changed;
@@ -181,7 +182,13 @@ namespace YaytsaCloud
         async Task<Installed> RunSetup(CatalogApp a, string path)
         {
             var before = Uninstaller.All();
-            var p = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            // Как в Creative Cloud: ставим молча, без окна установщика. Не знаем ключей — показываем окно как есть.
+            var silent = !string.IsNullOrWhiteSpace(a.silent) ? a.silent : SilentArgs(path);
+            var start = path.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)
+                ? new ProcessStartInfo("msiexec.exe", $"/i \"{path}\" /qn /norestart")
+                : new ProcessStartInfo(path, silent ?? "");
+            start.UseShellExecute = true;
+            var p = Process.Start(start);
             await Task.Run(() => p.WaitForExit());
             // Новая или обновлённая запись в списке программ — наша. Иначе ищем по имени.
             var after = Uninstaller.All();
@@ -190,6 +197,18 @@ namespace YaytsaCloud
                 ?? Uninstaller.ByName(a.name);
             if (key == null) throw new Exception("Установка не завершилась.");
             return new Installed { kind = "setup", key = key, exe = Uninstaller.Exe(key) };
+        }
+
+        // Тип установщика по метке в начале файла: у Inno Setup и NSIS тихие ключи стандартные.
+        static string SilentArgs(string path)
+        {
+            var buf = new byte[4 << 20];
+            int n;
+            using (var f = File.OpenRead(path)) n = f.Read(buf, 0, buf.Length);
+            var head = System.Text.Encoding.ASCII.GetString(buf, 0, n);
+            if (head.Contains("Inno Setup")) return "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-";
+            if (head.Contains("Nullsoft")) return "/S";
+            return null;
         }
 
         Installed InstallPortable(CatalogApp a, string path)
@@ -217,7 +236,7 @@ namespace YaytsaCloud
             var i = a == null ? null : Find(a);
             if (i == null || i.kind == "shortcut" || busy.ContainsKey(id)) return;
             missUntil.Remove(id);
-            busy[id] = -1;
+            busy[id] = -2; // -2 — удаление
             Fire();
             try
             {
