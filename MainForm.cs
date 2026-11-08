@@ -14,10 +14,17 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace YaytsaCloud
 {
+    // Окно, впервые показанное из трея, передаёт фокус браузеру «как по Tab», и тот ставит фокус на первый элемент
+    // страницы (логотип) с рамкой. Кроме браузера в окне ничего нет, так что Tab-переход ему не нужен: фокусируем обычно.
+    class Web : WebView2
+    {
+        protected override void Select(bool directed, bool forward) => base.Select(false, forward);
+    }
+
     public class MainForm : Form
     {
         readonly string site;
-        readonly WebView2 web = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(11, 11, 11) };
+        readonly WebView2 web = new Web { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(11, 11, 11) };
         readonly NotifyIcon tray;
         readonly Apps apps = new Apps();
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
