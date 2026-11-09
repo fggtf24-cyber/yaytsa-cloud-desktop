@@ -19,7 +19,18 @@ namespace YaytsaCloud
     // kind: setup — ставилась установщиком, её видно в «Программы и компоненты»; portable — один exe в нашей папке;
     // shortcut — найдена по ярлыку в «Пуске» (программа без установщика, лежит где угодно): открыть можно, удалить — нет.
     // fp — отпечаток файла на сервере при установке. Поменялся — вышла новая версия.
-    public class Installed { public string kind, key, exe, fp; }
+    // local — как программа выглядела у нас на диске (версия в Windows, дата и размер exe). Поменялось без нас —
+    // программу обновили в обход приложения (например, пока оно было закрыто): считаем её свежей.
+    public class Installed
+    {
+        public string kind, key, exe, fp, local;
+        public string Stamp()
+        {
+            var v = kind == "setup" ? Uninstaller.Version(key) : null;
+            try { if (exe != null && File.Exists(exe)) { var f = new FileInfo(exe); v += "|" + f.LastWriteTimeUtc.Ticks + "|" + f.Length; } } catch { }
+            return v ?? "";
+        }
+    }
 
     public class Apps
     {
@@ -113,8 +124,10 @@ namespace YaytsaCloud
                 if (i == null || busy.ContainsKey(a.id)) continue;
                 string fp;
                 try { fp = await Fingerprint(a.file); } catch { continue; }
-                // Поставлено до нас: версию не знаем, считаем свежей.
-                if (i.fp == null) { i.fp = fp; Save(); }
+                // Поставлено до нас, обновлено в обход нас или записано старой версией приложения (без local):
+                // какую версию поставили, не знаем, считаем свежей.
+                var stamp = i.Stamp();
+                if (i.fp == null || i.local != stamp) { i.fp = fp; i.local = stamp; Save(); }
                 var was = latest.TryGetValue(a.id, out var old) ? old : i.fp;
                 latest[a.id] = fp;
                 if (fp != i.fp && fp != was) UpdateFound?.Invoke(a.name);
@@ -167,6 +180,7 @@ namespace YaytsaCloud
                 var setup = Regex.IsMatch(Path.GetFileName(path), "setup|install", RegexOptions.IgnoreCase) || path.EndsWith(".msi", StringComparison.OrdinalIgnoreCase);
                 var i = setup ? await RunSetup(a, path) : InstallPortable(a, path);
                 i.fp = fp;
+                i.local = i.Stamp();
                 state[id] = i;
                 latest[id] = fp;
                 Save();
@@ -320,6 +334,8 @@ namespace YaytsaCloud
         }
 
         public static bool Exists(string key) { using var k = Open(key); return k != null; }
+
+        public static string Version(string key) { using var k = Open(key); return k?.GetValue("DisplayVersion") as string; }
 
         // ключ -> имя + версия: по изменению видно, что установщик что-то поставил или обновил.
         public static Dictionary<string, string> All()
