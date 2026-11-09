@@ -62,6 +62,8 @@ namespace YaytsaCloud
             if (string.Equals(Path.GetFullPath(Exe), Path.GetFullPath(InstalledExe), StringComparison.OrdinalIgnoreCase))
                 try { using var k = Registry.CurrentUser.OpenSubKey(UninstallKey, true); k?.SetValue("DisplayVersion", Version.ToString(3)); } catch { }
             Extract(Path.GetDirectoryName(Exe));
+            // Только что обновились: Windows держит старую иконку exe в кэше (панель задач, ярлыки) — просим перечитать.
+            if (File.Exists(Exe + ".old")) RefreshIcons();
             try { File.Delete(Exe + ".old"); } catch { }
 
             var url = args.SkipWhile(a => a != "--url").Skip(1).FirstOrDefault() ?? Site;
@@ -111,6 +113,7 @@ namespace YaytsaCloud
                 Extract(InstallDir);
                 Shortcut(StartMenu, InstalledExe);
                 Shortcut(Desktop, InstalledExe);
+                RefreshIcons();
                 SetAutostart(true);
                 using (var k = Registry.CurrentUser.CreateSubKey(UninstallKey))
                 {
@@ -147,6 +150,9 @@ namespace YaytsaCloud
             Process.Start(new ProcessStartInfo("cmd.exe", $"/c timeout /t 2 >nul & rmdir /s /q \"{InstallDir}\" & rmdir /s /q \"{DataDir}\"")
             { CreateNoWindow = true, UseShellExecute = false });
         }
+
+        [DllImport("shell32.dll")] static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
+        static void RefreshIcons() { try { SHChangeNotify(0x08000000 /* SHCNE_ASSOCCHANGED */, 0, IntPtr.Zero, IntPtr.Zero); } catch { } }
 
         public static bool Autostart
         {
