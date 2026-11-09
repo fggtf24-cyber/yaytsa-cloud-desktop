@@ -36,7 +36,28 @@ namespace YaytsaCloud
     {
         static readonly string StateFile = Path.Combine(Program.DataDir, "apps.json");
         static readonly string Downloads = Path.Combine(Program.DataDir, "downloads");
-        static readonly string PortableRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
+        static readonly string DefaultRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
+        static readonly string RootFile = Path.Combine(Program.DataDir, "install-dir.txt");
+
+        // Папка, куда ставим новые программы: спрашиваем при первой установке, меняется в аккаунте на сайте.
+        // Уже установленные остаются где были. Пока не выбрана, установщики ставят в свою обычную папку.
+        public static bool RootChosen => File.Exists(RootFile);
+        public static string Root
+        {
+            get { try { var d = File.ReadAllText(RootFile).Trim(); if (d.Length > 0) return d; } catch { } return DefaultRoot; }
+            set
+            {
+                // Проверяем, что можем писать без прав администратора (Program Files — нет).
+                var probe = Path.Combine(value, ".yaytsa-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(value);
+                File.WriteAllText(probe, "");
+                File.Delete(probe);
+                Directory.CreateDirectory(Program.DataDir);
+                File.WriteAllText(RootFile, value);
+            }
+        }
+
+        static string DirName(CatalogApp a) => Regex.Replace(a.name, @"[^\w\- ]", "").Trim() is var n && n.Length > 0 ? n : a.id;
         static readonly string StartMenuDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), Program.Name);
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         public static readonly HttpClient Http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
@@ -135,6 +156,8 @@ namespace YaytsaCloud
             Fire();
         }
 
+        public bool IsInstalled(string id) => state.ContainsKey(id);
+
         public async Task Install(string id)
         {
             var a = Catalog.FirstOrDefault(x => x.id == id);
@@ -178,7 +201,10 @@ namespace YaytsaCloud
                 busy[id] = -1;
                 Fire();
                 var setup = Regex.IsMatch(Path.GetFileName(path), "setup|install", RegexOptions.IgnoreCase) || path.EndsWith(".msi", StringComparison.OrdinalIgnoreCase);
-                var i = setup ? await RunSetup(a, path) : InstallPortable(a, path);
+                // Обновление ставим туда же, где программа уже стоит; новую — в выбранную папку.
+                state.TryGetValue(id, out var prev);
+                var dir = prev == null && RootChosen ? Path.Combine(Root, DirName(a)) : null;
+                var i = setup ? await RunSetup(a, path, dir) : InstallPortable(a, path, prev);
                 i.fp = fp;
                 i.local = i.Stamp();
                 state[id] = i;
@@ -193,11 +219,12 @@ namespace YaytsaCloud
             }
         }
 
-        async Task<Installed> RunSetup(CatalogApp a, string path)
+        async Task<Installed> RunSetup(CatalogApp a, string path, string dir)
         {
             var before = Uninstaller.All();
             // Как в Creative Cloud: ставим молча, без окна установщика. Не знаем ключей — показываем окно как есть.
-            var silent = !string.IsNullOrWhiteSpace(a.silent) ? a.silent : SilentArgs(path);
+            // Папку умеем передать только Inno Setup и NSIS; в своих ключах из каталога и в окне установщика — как решит он сам.
+            var silent = !string.IsNullOrWhiteSpace(a.silent) ? a.silent : SilentArgs(path, dir);
             var start = path.EndsWith(".msi", StringComparison.OrdinalIgnoreCase)
                 ? new ProcessStartInfo("msiexec.exe", $"/i \"{path}\" /qn /norestart")
                 : new ProcessStartInfo(path, silent ?? "");
@@ -214,20 +241,20 @@ namespace YaytsaCloud
         }
 
         // Тип установщика по метке в начале файла: у Inno Setup и NSIS тихие ключи стандартные.
-        static string SilentArgs(string path)
+        static string SilentArgs(string path, string dir)
         {
             var buf = new byte[4 << 20];
             int n;
             using (var f = File.OpenRead(path)) n = f.Read(buf, 0, buf.Length);
             var head = System.Text.Encoding.ASCII.GetString(buf, 0, n);
-            if (head.Contains("Inno Setup")) return "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-";
-            if (head.Contains("Nullsoft")) return "/S";
+            if (head.Contains("Inno Setup")) return "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-" + (dir != null ? $" /DIR=\"{dir}\"" : "");
+            if (head.Contains("Nullsoft")) return "/S" + (dir != null ? " /D=" + dir : ""); // /D= — последним и без кавычек, так требует NSIS
             return null;
         }
 
-        Installed InstallPortable(CatalogApp a, string path)
+        Installed InstallPortable(CatalogApp a, string path, Installed prev)
         {
-            var dir = Path.Combine(PortableRoot, Regex.Replace(a.name, @"[^\w\- ]", "").Trim() is var n && n.Length > 0 ? n : a.id);
+            var dir = prev?.kind == "portable" && prev.exe != null ? Path.GetDirectoryName(prev.exe) : Path.Combine(Root, DirName(a));
             Directory.CreateDirectory(dir);
             var exe = Path.Combine(dir, Path.GetFileName(path));
             try { File.Copy(path, exe, true); }

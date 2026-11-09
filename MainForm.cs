@@ -151,7 +151,7 @@ namespace YaytsaCloud
         }
 
 #pragma warning disable CS0649 // поля заполняет JavaScriptSerializer
-        class Message { public string type, id, title, body, href, bg; public bool light; public List<CatalogApp> apps; }
+        class Message { public string type, id, title, body, href, bg, path; public bool light; public List<CatalogApp> apps; }
 
         async void OnMessage(string raw)
         {
@@ -172,7 +172,20 @@ namespace YaytsaCloud
                         apps.SetCatalog(m.apps ?? new List<CatalogApp>());
                         break;
                     case "install":
+                        // Первая установка: сайт сначала спросит, куда ставить, и пришлёт install ещё раз.
+                        if (!Apps.RootChosen && !apps.IsInstalled(m.id)) { Send(new { type = "need-root", id = m.id }); break; }
                         await apps.Install(m.id);
+                        break;
+                    case "settings":
+                        SendSettings();
+                        break;
+                    case "pick-root":
+                        // Только выбор: сохраняет сайт кнопкой, вместе со вставленным руками путём.
+                        var picked = FolderPicker.Show(Handle, "Куда ставить программы", Expand(m.path) ?? Apps.Root);
+                        if (picked != null) Send(new { type = "picked", path = picked });
+                        break;
+                    case "set-root":
+                        SetRoot(m.path);
                         break;
                     case "open":
                         apps.Open(m.id);
@@ -236,6 +249,32 @@ namespace YaytsaCloud
             menu.SetTheme(false);
             return menu;
         }
+
+        // Выбор папки для программ. false — окно закрыли, ничего не выбрано.
+        // Путь как его вставили: «Копировать как путь» в Проводнике даёт кавычки, бывают %USERPROFILE% и т. п.
+        static string Expand(string path)
+        {
+            path = Environment.ExpandEnvironmentVariables((path ?? "").Trim().Trim('"').Trim());
+            return path.Length == 0 ? null : path;
+        }
+
+        void SetRoot(string raw)
+        {
+            var path = Expand(raw);
+            string error = null;
+            if (path == null || !Path.IsPathRooted(path) || path.StartsWith(@"\"))
+                error = "Укажите полный путь к папке на диске, например D:\\Programs.";
+            else
+            {
+                try { Apps.Root = Path.GetFullPath(path); }
+                catch (UnauthorizedAccessException) { error = "В эту папку нельзя ставить без прав администратора. Выберите другую, например на диске D:."; }
+                catch (Exception e) { error = "Не получилось открыть папку: " + e.Message; }
+            }
+            if (error != null) Send(new { type = "settings", root = Apps.Root, chosen = Apps.RootChosen, error });
+            else Send(new { type = "settings", root = Apps.Root, chosen = true, saved = true });
+        }
+
+        void SendSettings() => Send(new { type = "settings", root = Apps.Root, chosen = Apps.RootChosen });
 
         void ShowWindow()
         {
