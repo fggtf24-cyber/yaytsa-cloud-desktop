@@ -295,12 +295,7 @@ namespace YaytsaCloud
             return null;
         }
 
-        static string Target(string lnk)
-        {
-            var shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-            var s = shell.GetType().InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
-            return (string)s.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.GetProperty, null, s, null);
-        }
+        static string Target(string lnk) => ShellLink.Target(lnk);
     }
 
     // Список «Программы и компоненты»: ключи Uninstall в HKCU и HKLM (64 и 32 бита).

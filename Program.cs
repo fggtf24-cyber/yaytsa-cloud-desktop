@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -158,15 +160,54 @@ namespace YaytsaCloud
             else k.DeleteValue("YaytsaCloud", false);
         }
 
+        // Через IShellLinkW, а не WScript.Shell: тот пишет путь в ANSI, и на ПК с нерусской локалью
+        // «Яйца Cloud.lnk» превращается в «???? Cloud.lnk» — сохранить не получается.
         public static void Shortcut(string lnk, string target)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(lnk));
-            var shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-            dynamic s = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
-            s.TargetPath = target;
-            s.WorkingDirectory = Path.GetDirectoryName(target);
-            s.IconLocation = target + ",0";
-            s.Save();
+            var s = (ShellLink.IShellLinkW)new ShellLink.CShellLink();
+            s.SetPath(target);
+            s.SetWorkingDirectory(Path.GetDirectoryName(target));
+            s.SetIconLocation(target, 0);
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)s).Save(lnk, true);
+        }
+    }
+
+    static class ShellLink
+    {
+        [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+        public class CShellLink { }
+
+        [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+        public interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cch, IntPtr pfd, int fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cch);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cch);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cch);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cch, out int piIcon);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, int dwReserved);
+            void Resolve(IntPtr hwnd, int fFlags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        }
+
+        public static string Target(string lnk)
+        {
+            var s = (IShellLinkW)new CShellLink();
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)s).Load(lnk, 0);
+            var sb = new StringBuilder(1024);
+            s.GetPath(sb, sb.Capacity, IntPtr.Zero, 0);
+            return sb.ToString();
         }
     }
 }
