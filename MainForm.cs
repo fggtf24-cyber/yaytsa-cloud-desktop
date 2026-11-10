@@ -24,7 +24,7 @@ namespace YaytsaCloud
     public class MainForm : Form
     {
         readonly string site;
-        readonly WebView2 web = new Web { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(11, 11, 11) };
+        WebView2 web = new Web { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(11, 11, 11) };
         readonly NotifyIcon tray;
         readonly Apps apps = new Apps();
         readonly JavaScriptSerializer json = new JavaScriptSerializer();
@@ -127,10 +127,28 @@ namespace YaytsaCloud
                 else OpenExternal(e.Uri);
             };
             core.WebMessageReceived += (s, e) => OnMessage(e.WebMessageAsJson);
+            core.ProcessFailed += (s, e) => { var kind = e.ProcessFailedKind; BeginInvoke((Action)(() => Recover(kind))); };
             // Свежий сайт при каждом запуске: GitHub Pages и его CDN держат главную страницу до 10 минут, и после выкладки
             // приложение открывало бы старую версию. Метка в адресе делает запрос новым; остальные файлы сайт версионирует сам.
             core.Navigate(site + (site.Contains("?") ? "&" : "?") + "t=" + DateTime.UtcNow.Ticks);
             await SelfUpdate();
+        }
+
+        // За часы в трее процесс браузера могут убить или подвесить (сон, нехватка памяти, сбой видеодрайвера).
+        // Без этого в окне остаётся только тёмный фон — «чёрный экран». Страницу перезагружаем, умерший браузер создаём заново.
+        void Recover(CoreWebView2ProcessFailedKind kind)
+        {
+            if (kind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                Controls.Remove(web);
+                web.Dispose();
+                web = new Web { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor };
+                Controls.Add(web);
+                loaded = false;
+                Init().ContinueWith(t => { }, TaskContinuationOptions.OnlyOnFaulted);
+            }
+            else if (kind == CoreWebView2ProcessFailedKind.RenderProcessExited || kind == CoreWebView2ProcessFailedKind.RenderProcessUnresponsive)
+                web.CoreWebView2?.Reload();
         }
 
         bool Inside(string uri) => uri.StartsWith(site, StringComparison.OrdinalIgnoreCase) || uri.StartsWith("about:") || uri.StartsWith("data:") || uri.StartsWith("blob:");
