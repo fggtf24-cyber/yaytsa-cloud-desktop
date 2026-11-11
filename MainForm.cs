@@ -126,6 +126,11 @@ namespace YaytsaCloud
                 if (Inside(e.Uri)) core.Navigate(e.Uri);
                 else OpenExternal(e.Uri);
             };
+            // Микрофон для голосовых: своему сайту разрешаем сами, без окна WebView2 «Разрешить?».
+            core.PermissionRequested += (s, e) =>
+            {
+                if (e.PermissionKind == CoreWebView2PermissionKind.Microphone && Inside(e.Uri)) e.State = CoreWebView2PermissionState.Allow;
+            };
             core.WebMessageReceived += (s, e) => OnMessage(e.WebMessageAsJson);
             core.ProcessFailed += (s, e) => { var kind = e.ProcessFailedKind; BeginInvoke((Action)(() => Recover(kind))); };
             // Свежий сайт при каждом запуске: GitHub Pages и его CDN держат главную страницу до 10 минут, и после выкладки
