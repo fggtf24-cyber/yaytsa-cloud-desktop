@@ -129,7 +129,10 @@ namespace YaytsaCloud
             // Микрофон для голосовых: своему сайту разрешаем сами, без окна WebView2 «Разрешить?».
             core.PermissionRequested += (s, e) =>
             {
-                if (e.PermissionKind == CoreWebView2PermissionKind.Microphone && Inside(e.Uri)) e.State = CoreWebView2PermissionState.Allow;
+                // e.Uri здесь — только источник (https://fggtf24-cyber.github.io/), без пути сайта, поэтому сравниваем домены.
+                if (e.PermissionKind == CoreWebView2PermissionKind.Microphone && Uri.TryCreate(e.Uri, UriKind.Absolute, out var u)
+                    && u.GetLeftPart(UriPartial.Authority).Equals(new Uri(site).GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
+                    e.State = CoreWebView2PermissionState.Allow;
             };
             core.WebMessageReceived += (s, e) => OnMessage(e.WebMessageAsJson);
             core.ProcessFailed += (s, e) => { var kind = e.ProcessFailedKind; BeginInvoke((Action)(() => Recover(kind))); };
