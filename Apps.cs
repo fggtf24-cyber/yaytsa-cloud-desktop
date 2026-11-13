@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using Microsoft.Win32;
@@ -130,29 +131,64 @@ namespace YaytsaCloud
         }
 
         // Отпечаток файла: адрес после переадресаций (у релизов GitHub в нём номер файла) + ETag + размер.
+        // Нужны только заголовки: одному запросу — 30 секунд, а не общие 30 минут клиента (они для скачивания установщиков),
+        // иначе зависшее соединение держит всю проверку по полчаса на программу.
         static async Task<string> Fingerprint(string url)
         {
-            using var res = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var res = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             res.EnsureSuccessStatusCode();
             return res.RequestMessage.RequestUri.GetLeftPart(UriPartial.Path) + "|" + res.Headers.ETag?.Tag + "|" + res.Content.Headers.ContentLength;
         }
 
+        // Журнал проверок обновлений: без него не видно, почему приложение не замечает новые версии.
+        static readonly string LogFile = Path.Combine(Program.DataDir, "updates.log");
+        public static void Log(string text)
+        {
+            try
+            {
+                if (File.Exists(LogFile) && new FileInfo(LogFile).Length > 256 * 1024) File.Delete(LogFile);
+                File.AppendAllText(LogFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {text}\r\n");
+            }
+            catch { }
+        }
+
+        static string Why(Exception e)
+        {
+            var parts = new List<string>();
+            for (var x = e; x != null; x = x.InnerException) parts.Add(x.GetType().Name + ": " + x.Message);
+            return string.Join(" <- ", parts);
+        }
+
+        bool checking;
         public async Task CheckUpdates()
         {
-            foreach (var a in Catalog.ToList())
+            if (checking) return;
+            checking = true;
+            Log($"проверка: {Catalog.Count} программ в каталоге");
+            try
             {
-                var i = Find(a);
-                if (i == null || busy.ContainsKey(a.id)) continue;
-                string fp;
-                try { fp = await Fingerprint(a.file); } catch { continue; }
-                // Поставлено до нас, обновлено в обход нас или записано старой версией приложения (без local):
-                // какую версию поставили, не знаем, считаем свежей.
-                var stamp = i.Stamp();
-                if (i.fp == null || i.local != stamp) { i.fp = fp; i.local = stamp; Save(); }
-                var was = latest.TryGetValue(a.id, out var old) ? old : i.fp;
-                latest[a.id] = fp;
-                if (fp != i.fp && fp != was) UpdateFound?.Invoke(a.name);
+                foreach (var a in Catalog.ToList())
+                {
+                    try
+                    {
+                        var i = Find(a);
+                        if (i == null || busy.ContainsKey(a.id)) continue;
+                        var fp = await Fingerprint(a.file);
+                        // Поставлено до нас, обновлено в обход нас или записано старой версией приложения (без local):
+                        // какую версию поставили, не знаем, считаем свежей.
+                        var stamp = i.Stamp();
+                        if (i.fp == null || i.local != stamp) { i.fp = fp; i.local = stamp; Save(); }
+                        var was = latest.TryGetValue(a.id, out var old) ? old : i.fp;
+                        latest[a.id] = fp;
+                        Log($"{a.id}: {(fp != i.fp ? "есть обновление" : "свежая")}");
+                        if (fp != i.fp && fp != was) UpdateFound?.Invoke(a.name);
+                    }
+                    catch (Exception e) { Log($"{a.id}: {Why(e)}"); }
+                }
             }
+            catch (Exception e) { Log("проверка оборвалась: " + Why(e)); }
+            finally { checking = false; }
             Fire();
         }
 

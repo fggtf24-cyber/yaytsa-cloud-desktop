@@ -351,7 +351,7 @@ namespace YaytsaCloud
                 selfUpdated = true;
                 Balloon($"{Program.Name} {v.ToString(3)}", "Обновление скачано и включится при следующем запуске.", null);
             }
-            catch { }
+            catch (Exception e) { Apps.Log("самообновление: " + e.Message); }
         }
     }
 }
