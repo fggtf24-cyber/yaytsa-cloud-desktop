@@ -129,7 +129,7 @@ namespace YaytsaCloud
             // Микрофон для голосовых: своему сайту разрешаем сами, без окна WebView2 «Разрешить?».
             core.PermissionRequested += (s, e) =>
             {
-                // e.Uri здесь — только источник (https://fggtf24-cyber.github.io/), без пути сайта, поэтому сравниваем домены.
+                // e.Uri здесь — только источник (https://yaytsacloud.art/), без пути сайта, поэтому сравниваем домены.
                 if (e.PermissionKind == CoreWebView2PermissionKind.Microphone && Uri.TryCreate(e.Uri, UriKind.Absolute, out var u)
                     && u.GetLeftPart(UriPartial.Authority).Equals(new Uri(site).GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase))
                     e.State = CoreWebView2PermissionState.Allow;
@@ -159,7 +159,7 @@ namespace YaytsaCloud
                 web.CoreWebView2?.Reload();
         }
 
-        bool Inside(string uri) => uri.StartsWith(site, StringComparison.OrdinalIgnoreCase) || uri.StartsWith("about:") || uri.StartsWith("data:") || uri.StartsWith("blob:");
+        bool Inside(string uri) => uri.StartsWith(site, StringComparison.OrdinalIgnoreCase) || uri.StartsWith(Program.OldSite, StringComparison.OrdinalIgnoreCase) || uri.StartsWith("about:") || uri.StartsWith("data:") || uri.StartsWith("blob:");
 
         static bool Auth(string uri) =>
             Uri.TryCreate(uri, UriKind.Absolute, out var u) &&

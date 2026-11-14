@@ -16,7 +16,9 @@ namespace YaytsaCloud
     {
         public const string Name = "Яйца Cloud";
         public const string Repo = "fggtf24-cyber/yaytsa-cloud-desktop";
-        public static readonly string Site = "https://fggtf24-cyber.github.io/yaytsa-cloud/";
+        public static readonly string Site = "https://yaytsacloud.art/";
+        /// <summary>Прежний адрес: GitHub редиректит с него на Site, это не повод открывать браузер.</summary>
+        public const string OldSite = "https://fggtf24-cyber.github.io/yaytsa-cloud/";
 
         static readonly string Local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         public static readonly string InstallDir = Path.Combine(Local, "Programs", "YaytsaCloud");
