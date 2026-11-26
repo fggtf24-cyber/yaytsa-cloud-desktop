@@ -299,13 +299,32 @@ namespace YaytsaCloud
             return new Installed { kind = "portable", exe = exe };
         }
 
-        public void Open(string id)
+        // false — не нашли, чем запускать: программу без установщика могли положить куда угодно (например на D:),
+        // тогда пусть человек сам покажет exe — Locate его запомнит.
+        public bool Open(string id)
         {
             var a = Catalog.FirstOrDefault(x => x.id == id);
             var i = a == null ? null : Find(a);
-            if (i?.exe == null) throw new Exception("Не нашёл, как запустить программу. Откройте её из меню «Пуск».");
-            Process.Start(new ProcessStartInfo(i.exe) { WorkingDirectory = Path.GetDirectoryName(i.exe), UseShellExecute = true });
+            if (i?.exe == null || !File.Exists(i.exe)) { Fire(); return false; } // Fire — сайт перерисует кнопку, если программа пропала
+            Start(i.exe);
+            return true;
         }
+
+        public void Locate(string id, string exe)
+        {
+            if (!Catalog.Any(x => x.id == id) || !File.Exists(exe)) return;
+            // У поставленной установщиком оставляем удаление, меняем только путь к exe.
+            var i = state.TryGetValue(id, out var was) && was.kind == "setup" ? was : new Installed { kind = "shortcut" };
+            i.exe = exe;
+            state[id] = i;
+            missUntil.Remove(id);
+            Save();
+            Fire();
+            Start(exe);
+        }
+
+        static void Start(string exe) =>
+            Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(exe), UseShellExecute = true });
 
         public async Task Remove(string id)
         {
@@ -355,13 +374,15 @@ namespace YaytsaCloud
         {
             var name = Norm(a.name);
             var file = Path.GetFileName(new Uri(a.file).AbsolutePath);
+            var stem = Norm(Path.GetFileNameWithoutExtension(file)); // латиницей: Яйцечист на английском зовёт свой ярлык Yaytsechist
             foreach (var dir in Dirs.Where(Directory.Exists))
             {
                 string[] links;
                 try { links = Directory.GetFiles(dir, "*.lnk", SearchOption.AllDirectories); } catch { continue; }
                 foreach (var lnk in links)
                 {
-                    var byName = name.Length > 0 && Norm(Path.GetFileNameWithoutExtension(lnk)).StartsWith(name);
+                    var ln = Norm(Path.GetFileNameWithoutExtension(lnk));
+                    var byName = name.Length > 0 && ln.StartsWith(name) || stem.Length > 0 && ln.StartsWith(stem);
                     string target;
                     try { target = Target(lnk); } catch { continue; }
                     if (string.IsNullOrEmpty(target) || !target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(target)) continue;

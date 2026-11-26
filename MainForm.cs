@@ -214,7 +214,11 @@ namespace YaytsaCloud
                         SetRoot(m.path);
                         break;
                     case "open":
-                        apps.Open(m.id);
+                        if (apps.Open(m.id)) break;
+                        var app = apps.Catalog.FirstOrDefault(x => x.id == m.id);
+                        if (app == null) break;
+                        using (var d = new OpenFileDialog { Title = $"Где лежит {app.name}? Укажите его exe", Filter = "Программа (*.exe)|*.exe" })
+                            if (d.ShowDialog(this) == DialogResult.OK) apps.Locate(m.id, d.FileName);
                         break;
                     case "remove":
                         await apps.Remove(m.id);
